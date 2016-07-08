@@ -10,25 +10,19 @@ const regenDebug = debug('trea:regen');
 if (!setImmediate) setImmediate = c => setTimeout(c, 0);
 
 let partialId = 0;
+let paramSerializeCache = new Map();
 
 function Partial() {
     this._partialId = partialId++;
     this._requiredPartials = new Map();
-    this._requiredPartialCache = new Map();
-    this._getPartialLock = true;
-    this._genCache = false;
-    this.genTime = new Date();
-    this._renderPromise = false;
     this._hasInit = false;
     this._initPromise = false;
-
-    this._needsUpdateCacheTime = false;
-    this._needsUpdateCacheVal = null;
+    this._keyCache = new Map();
 }
 
 Partial.prototype.requires = co.wrap(function*(name, partial) {
     if (partial._generate) {
-        requireDebug('partial#' + this._partialId + ' -> ' + ' partial#' + partial._partialId + ' (' + name + ')');
+        requireDebug('#' + this._partialId + ' -> #' + partial._partialId + ' (' + name + ')');
         this._requiredPartials.set(name, partial);
         if (this._hasInit) {
             if (this._initPromise) yield this._initPromise;
@@ -37,12 +31,6 @@ Partial.prototype.requires = co.wrap(function*(name, partial) {
     }
     else throw new TypeError('Partial generation function is required');
 });
-
-Partial.prototype.partial = function(name) {
-    if (this._getPartialLock) throw new Error('Cannot access partials outside of generate call');
-    if (!this._requiredPartialCache.has(name)) throw new ReferenceError('Unknown partial "' + name + '"');
-    return this._requiredPartialCache.get(name);
-};
 
 Partial.prototype._needsUpdate = function() {
     return false;
@@ -59,78 +47,96 @@ Partial.prototype.init = co.wrap(function*() {
 });
 
 Partial.prototype._doInit = co.wrap(function*() {
-    initDebug('partial#' + this._partialId);
+    initDebug('#' + this._partialId);
     yield Promise.resolve(this._init());
     this._hasInit = true;
     yield Array.from(this._requiredPartials.values()).map(partial => Promise.resolve(partial.init()));
 });
 
-Partial.prototype.generate = co.wrap(function*(since) {
+Partial.prototype._getCache = function(param) {
+    if (!paramSerializeCache.has(param)) paramSerializeCache.set(param, JSON.stringify(param));
+    let keyName = paramSerializeCache.get(param);
+
+    if (!this._keyCache.has(keyName)) {
+        this._keyCache.set(keyName, {
+            genCache: false,
+            genTime: new Date(),
+            renderPromise: false,
+            needsUpdateCacheTime: false,
+            needsUpdateCacheVal: false,
+            keyName
+        });
+    }
+    return this._keyCache.get(keyName);
+};
+
+Partial.prototype.genTime = function(param) {
+    return this._getCache(param).genTime;
+};
+
+Partial.prototype.generate = co.wrap(function*(since, param = 'default') {
     // wait for initialization to complete
     if (this._initPromise) yield this._initPromise;
 
+    let currentCache = this._getCache(param);
+
     // prevent multiple generations happening at the same time
-    if (this._renderPromise) {
-        holdDebug('partial#' + this._partialId);
-        return yield this._renderPromise;
+    if (currentCache.renderPromise) {
+        holdDebug(this._partialId + '#' + currentCache.keyName);
+        return yield currentCache.renderPromise;
     }
 
-    this._getPartialLock = false;
-    let genPromise = this._doGenerate(since);
-    this._renderPromise = genPromise;
+    let genPromise = this._doGenerate(since, param, currentCache);
+    currentCache.renderPromise = genPromise;
     let result = yield genPromise;
-    this._renderPromise = false;
-    this._getPartialLock = true;
-    this._clearNeedsUpdate();
+    currentCache.renderPromise = false;
+    currentCache.needsUpdateCacheTime = false;
     return result;
 });
 
-Partial.prototype._doGenerate = co.wrap(function*(since) {
-    let regen = this._genCache === false || (yield this.needsUpdate(since));
+Partial.prototype._doGenerate = co.wrap(function*(since, param, currentCache) {
+    let regen = currentCache.genCache === false || (yield this.needsUpdate(since, param));
     if (!regen) {
-        cacheHitDebug('partial#' + this._partialId);
-        return this._genCache;
+        cacheHitDebug(this._partialId + '#' + currentCache.keyName);
+        return currentCache.genCache;
     }
 
     // update all partials
     let partialContents = new Map();
     yield Array.from(this._requiredPartials.keys()).map(name => {
         let partial = this._requiredPartials.get(name);
-        return partial.generate(since).then(r => partialContents.set(name, r));
+        return partial.generate(since, param).then(r => partialContents.set(name, r));
     });
+    
+    function getPartial(name) {
+        if (!partialContents.has(name)) throw new ReferenceError('Unknown partial "' + name + '"');
+        return partialContents.get(name);
+    }
 
-    this._requiredPartialCache = partialContents;
-    this.genTime = new Date();
-    regenDebug('partial#' + this._partialId);
-    return this._genCache = yield Promise.resolve(this._generate());
+    currentCache.genTime = new Date();
+    regenDebug(this._partialId + '#' + currentCache.keyName);
+    return currentCache.genCache = yield Promise.resolve(this._generate(getPartial, param));
 });
 
-Partial.prototype.needsUpdate = co.wrap(function*(since) {
+Partial.prototype.needsUpdate = co.wrap(function*(since, param = 'default') {
     // wait for initialization to complete
     if (this._initPromise) yield this._initPromise;
-    since = since || this.genTime;
 
-    if (this._needsUpdateCacheTime === since) return this._needsUpdateCacheVal;
-    this._needsUpdateCacheTime = since;
-    return this._needsUpdateCacheVal = yield this._recalcNeedsUpdate(since);
+    let currentCache = this._getCache(param);
+    since = since || currentCache.genTime;
+
+    if (currentCache.needsUpdateCacheTime === since) return currentCache.needsUpdateCacheVal;
+    currentCache.needsUpdateCacheTime = since;
+    return currentCache.needsUpdateCacheVal = yield this._recalcNeedsUpdate(since, param);
 });
 
-Partial.prototype._clearNeedsUpdate = function() {
-    this._needsUpdateCacheTime = false;
-    
-    // also clear children values
-    for (let [name, partial] of this._requiredPartials) {
-        partial._clearNeedsUpdate();
-    }
-};
-
-Partial.prototype._recalcNeedsUpdate = co.wrap(function*(since) {
-    if (yield Promise.resolve(this._needsUpdate(since))) return true;
+Partial.prototype._recalcNeedsUpdate = co.wrap(function*(since, param) {
+    if (yield Promise.resolve(this._needsUpdate(since, param))) return true;
 
     // find if any sub-partials need updating
     // todo: parallel checking
     for (let [name, partial] of this._requiredPartials) {
-        if (yield partial.needsUpdate(since)) return true;
+        if (yield partial.needsUpdate(since, param)) return true;
     }
     return false;
 });

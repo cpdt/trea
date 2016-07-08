@@ -12,7 +12,7 @@ util.inherits(EJSPartial, Partial);
 
 EJSPartial.prototype._init = co.wrap(function*(...partialParams) {
     if (!this.path) throw new Error('EJSPartial requires a path to be set');
-    if (this.partials == null) throw new Error('EJSPartial requires partial mapping object');
+    if (typeof this.partials !== 'function') throw new Error('EJSPartial requires partial mapping function (got ' + typeof this.partials + ')');
 
     let templateContent = yield fs.readFile(this.path, 'utf8');
     this.template = ejs.compile(templateContent, { filename: this.path });
@@ -22,15 +22,16 @@ EJSPartial.prototype._init = co.wrap(function*(...partialParams) {
     let singleResult;
     while ((singleResult = partialRe.exec(templateContent)) !== null) {
         let partialName = singleResult[1] || singleResult[2];
-        let partialConstructor = this.partials[partialName];
-        yield this.requires(partialName, new partialConstructor(...partialParams));
+        yield this.requires(partialName, this.partials(partialName, ...partialParams));
     }
 });
 
-EJSPartial.prototype._generate = function (params) {
-    let opts = { partial: this.partial.bind(this) };
-    if (params) opts = Object.assign({}, params, opts);
-
+EJSPartial.prototype._generate = function (partial, params) {
+    let opts = { partial };
+    if (params) {
+        if (typeof params === 'object') opts = Object.assign({}, params, opts);
+        else opts.param = params;
+    }
     return this.template(opts);
 };
 
