@@ -13,7 +13,7 @@
 npm install trea --save
 ```
 
-> N.B. trea currently only works on Node 6 or later, due to its use of generators and ES2015 features).
+> N.B. trea currently only works on Node 6 or later, due to its use of generators and ES2015 features.
 
 ## get started
 
