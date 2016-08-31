@@ -1,190 +1,247 @@
-# Trea
+# :palm_tree: trea
 
-> A fast, framework-agnostic partial system for old-skool page generation in NodeJS
+> **The entire internet in your palm (tree).**
+> A fast, framework-agnostic partial system for old-skool page generation with NodeJS.
 
-Trea allows you to split your pages into 'partials', which are individually generated and cached, and then stitched back together when required. Partials are cached, and are rebuilt when your application signals that it has changed. You can also include partials inside partials, allowing for very complex dynamic sites to be built.
+ - Individually cache separate parts (partials) of your page and then automatically stitch them back together
+ - Put partials in partials in partials - it's partials all the way down!
+ - Partials can output anything! Strings, arrays, objects, XML nodes, [:turtle: turtles](https://en.wikipedia.org/wiki/Turtles_all_the_way_down), [:squirrel: jQuery](http://i.stack.imgur.com/sGhaO.gif), whatever.
 
-A partial can 'output' anything: a string, array, object, XML node, whatever. As a result, you can theoretically use any web framework in order to generate partials.
-
-## Usage
-
-Trea is on NPM, and works on Node 6 or later (due to its use of generators and ES2015 features).
+## find it on npm
 
 ```
 npm install trea --save
 ```
 
-### Creating Partials
+> N.B. trea currently only works on Node 6 or later, due to its use of generators and ES2015 features).
 
-To define a simple partial whose content should never change, provide an implementation for `_generate`. It can optionally return a promise, or the value of the partial.
+## get started
+
+In trea, everything is a partial - your pages, page sections, section sections, etc. You create a partial by creating a class that extends trea's `Partial` class:
 
 ```js
-let trea = require('trea');
-let Partial = trea.Partial;
+let Partial = require('trea').Partial;
 
-class MyPartial extends Partial {
+class NicePartial extends Partial {
+    // lolwut
+}
+```
+
+Each partial has an 'output' - the information that the partial generates. A partials output can be anything - a string, number, object, etc. To output data from a partial, implement the `_generate` method:
+
+```js
+class HelloPartial extends Partial {
     _generate() {
-        return "My partial";
+        return 'Hello world!';
     }
 }
 ```
 
-In order to render our partial, we create an instance of it and call the `generate` function:
+The output of the partial can now be gotten by calling the `generate` method on an instance of the class:
 
 ```js
-let myPartial = new MyPartial();
-console.log(myPartial.generate()); // "My partial"
-console.log(myPartial.generate()); // "My partial"
+let hello = new HelloPartial();
+hello.generate().then(x => console.log(x)); // 'Hello world!'
+hello.generate().then(x => console.log(x)); // 'Hello world!'
 ```
 
-Note that, even though we call `generate` twice, our `_generate` implementation is only called the first time. So far, then, this is a simple memoization system. Trea also allows us to specify a function that is called in order to determine whether the partial contents have changed since a given date - as with `_generate`, this function can return a promise or a boolean.
+(Notice that the `_generate` method defined before isn't being called, but instead the code is calling a `generate` method provided by the Partial class)
+
+See how the `generate` method is called twice? Well, as the code below shows, the `_generate` implemented previously is actually only called once:
 
 ```js
-let startTime = new Date();
-
-class MyOtherPartial extends Partial {
-    _needsUpdate(date) {
-        let secondsAgo = (new Date()) - 5000;
-        return secondsAgo > date;
-        // if more than 5 seconds have passed since the last update time, say
-        // that our partial needs an update
-    }
+class SideEffectPartial extends Partial {
     _generate() {
-        let currentTime = new Date();
-        return (currentTime - startTime) / 1000;
-        // return the number of seconds since the program was started
+        console.log('Hey, I was called');
+        return '💡';
     }
 }
+
+let sideEffect = new SideEffectPartial();
+sideEffect.generate().then(x => console.log(x)); // 'Hey, I was called' then '💡'
+sideEffect.generate().then(x => console.log(x)); // '💡'
 ```
 
-The Date that is passed to `_needsUpdate` is the time that the partial was generated previously. We return a boolean value from the function, where `true` says that our partial needs to be generated, and `false` says that it doesn not. Hence, if we use the following code:
+This behaviour is intended, and it's important to the way trea works. As a result, you should keep so-called '[side effects](http://programmers.stackexchange.com/questions/40297/what-is-a-side-effect)' out of your `_generate` method (except for some important exceptions, which we'll have a look at soon). If you need to do something every time `generate` is called, implement the `_act` method:
 
 ```js
-let myOtherPartial = new MyOtherPartial();
-setInterval(function() {
-    console.log(myOtherPartial.generate());
-}, 1000);
-```
-
-The `_generate` function will be called approximately once every five times `generate` is called, and we will see the time since the program started being updated every five seconds.
-
-We can also pass in a date to `partial.generate`, and that date will then be used as the date in `_needsUpdate`.
-
-### Partials in Partials
-
-Part of the power of Trea is the ability to embed partials inside partials. Trea makes this incredibly simple, and ensures that your partial is regenerated whenever a sub-partial needs regeneration.
-
-In order to declare that a partial uses a sub-partial, we can use the `requires` method - we pass it a name to call the sub-partial, as well as the partial object. Inside the `_generate` function, we can then use the `partial` method to get the value of the partial.
-
-```js
-class DependantPartial extends Partial {
-    constructor() {
-        this.requires('myPartial', new MyPartial());
-        this.requires('myOtherPartial', new MyOtherPartial());
+class SideEffectAgainPartial extends Partial {
+    _act() {
+        console.log('Hey, I was called');
     }
-
     _generate() {
-        return 'Some text from the first partial: ' + this.partial('myPartial')
-             + '\nFrom the second partial: ' + this.partial('myOtherPartial');
+        return '💡';
     }
 }
+
+let sideEffectAgain = new SideEffectAgainPartial();
+sideEffectAgain.generate().then(x => console.log(x)); // 'Hey, I was called' then '💡'
+sideEffectAgain.generate().then(x => console.log(x)); // 'Hey, I was called' then '💡'
 ```
 
-Since our new partial, by itself, returns a constant value, there is no need for us to define a `_needsUpdate` function. This will be handled automatically for sub-partials, so when `myOtherPartial` is regenerated, our `DependantPartial` will be too. Its also important to keep in mind that sub-partials are generated before your `_generate` function is called, allowing generation functions to return promises but you to put together the result synchronously.
+This may seem a bit pointless, but now is when we bring all of these together, with the `_needsUpdate` method. This method is called every time `generate` is called, and allows trea to determine whether the partial output should be re-generated (i.e whether `_generate` should be run again). For example, check this out:
 
-### Initialization
+```js
+class BigOperationPartial extends Partial {
+    constructor(val) {
+        this.val = val;
+        this._oldVal = val;
+    }
+    
+    _needsUpdate() {
+        let update = this.val !== this._oldVal;
+        this._oldVal = this.val;
+        return update;
+    }
+    
+    _generate() {
+        console.log('Regenerating...');
+        return JSON.stringify(this.val); // or some other expensive operation
+    }
+}
 
-Trea allows you to specify asynchronous initialization routines for partials. This can be done by providing an `_init` method in your partial class, which can optionally return a promise. In order to start initialization of a partial, call the `init` method - this will first initialize that partial, and then initialize all sub-partials that have been declared, and returns a promise that will resolve when all initialization is complete.
+let bigOperation = new BigOperationPartial({ hello: 'wassup' });
+bigOperation.generate().then(x => console.log(x)); // 'Regenerating...' then '{"hello": "wassup"}'
+bigOperation.generate().then(x => console.log(x)); // '{"hello": "wassup"}'
+bigOperation.val = { hello: 'goodbye' }; // change the value we're using
+bigOperation.generate().then(x => console.log(x)); // 'Regenerating...' then '{"hello": "goodbye"}'
+bigOperation.generate().then(x => console.log(x)); // '{"hello": "goodbye"}'
+```
 
-If a partial is 'required' after its parent has been initialized, that partial will be initialized immediately.
+Alright, now we're getting somewhere - but this is all still just a memoization system, and one that can be easily simplified with less code. But now we're getting to the point where trea really becomes useful: partials within partials. Check this out:
 
-### EJS Partial
+```js
+class TwoBigOperationsPartial extends Partial {
+    constructor(op1, op2) {
+        this.requires('op1', op1);
+        this.requires('op2', op2);
+    }
+    _generate(partial) {
+        return partial('op1') + " " + partial('op2');
+    }
+}
 
-In order to simplify web development, a small EJS Partial implemention is included (this will likely be moved to a separate module in the future).
+let bigOp1 = new BigOperationPartial({ hello: 'wassup' });
+let bigOp2 = new BigOperationPartial({ hello: 'goodbye' });
+let twoBigOperations = new TwoBigOperationsPartial(bigOp1, bigOp2);
+twoBigOperations.generate().then(x => console.log(x)); // 'Regenerating...' twice, then '{"hello": "wassup"} {"hello": "goodbye"}'
+bigOp1.val = { hello: 'bonjour' };
+twoBigOperations.generate().then(x => console.log(x)); // 'Regenerating...' once, then '{"hello": "bonjour"} {"hello": "goodbye"}'
+```
 
-In order to create an EJS Partial, extend from `trea.EJSPartial`. Your class will need to have a `path` property, specifying the location to the EJS file. Additionally, it must have a `partials` property, containing an object of partial names to partial classes.
+Notice here how only the partials that need to be regenerated are - in the first case, all three of the partials are generated, but in the second case only two must be (`bigOp1` and its container, `twoBigOperations`). This is where trea comes in handy for websites - by splitting dynamic parts (e.g. parts that are generated from a database) into partials, a website can be made very efficient.
 
-Parameters passed to `_init` will be passed to all partial constructors - this allows you to pass things like database objects, configuration, etc. You can also provide an object to `_generate`, which will be used as the scope of the EJS code. For example:
+### faqs
 
+**I know the most recent update time for my page, but don't want to implement a bunch of logic to detect if I need to regenerate a partial. What can I do?**<br>
+Great question, and luckily, trea has a solution for you. A date passed as the first parameter to `generate` will be passed to your `_needsUpdate` method, as well as any sub-partials. If no date is provided, the last time that the partial has been generated will be used - this allows you to easily find if a partial has changed since the last time it was generated.
+
+**What about pages that have parameters (e.g. GET parameters) passed to them that change their value though?**<br>
+I'm glad you asked that! In order to handle this, trea has a feature called 'partial parameters'. Any kind of value (string, number, object, etc, as long as it is JSON serializable) passed as a second parameter to the `generate` method will provided the partial's `_needsUpdate` and `_generate` methods, and will also filter down to any sub-partials. Partials are cached based on this value, so using a different value will cause the partial to be generated with that value.
+
+**What if my page generation is asynchronous?**<br>
+trea supports promises through-and-through, so you can return them from literally anything... Need to check your database for changes during `_needsUpdate`? Return a promise. Need to fetch some data from a file to `_generate` the partial? Return a promise.
+
+**What if my partial needs to do some initialization?**<br>
+trea allows you to define an asynchronous `_init` method. When the `init` method provided by the Partial class is called, that partial, as well as any sub-partials, will be initialized. If a sub-partial is required after a partial has been initialized, the sub-partial will be initialized straight away.
+
+### get your ejs on
+
+trea includes a super-simple EJS partial wrapper to make getting started easy (note: this will probably be moved to a separate package in the near future). Check it out:
+
+**EJSPage.js**
 ```js
 let path = require('path');
+let EJSPartial = require('trea').EJSPartial;
 let partials = require('./partials');
 
-class PagePartial extends EJSPartial {
+class EJSPagePartial extends EJSPartial {
     constructor(db) {
         super();
         this.db = db;
-        this.path = path.join(__dirname, "template.ejs");
+        this.path = path.join(__dirname, 'template.ejs');
         this.partials = partials;
     }
-
     _init() {
-        return super._init(this.db);
+        return super(this.db);
     }
-
-    _generate() {
-        return super._generate({
+    _generate(partial) {
+        return super(partial, {
             username: 'cpdt',
             avatarPath: '/images/user/cpdt.png'
         });
     }
 }
 ```
-
-Inside the EJS file, reference a partial with the `partial` function, like so:
-
+**template.ejs**
 ```ejs
+<p>Hello there <%= username %>.</p>
+<img src="<%= avatarPath %>" />
 <%- partial('infobox') %>
 ```
 
-The EJS Partial class will automatically find all partial references in the file and 'require' them.
+EJSPartial expects your object to have a `path` property that points to the EJS file to load, and a `partials` property that contains a list of partials to be accessible from inside your template. It will then automatically detect calls to `partial(...)` in your HTML, and require these in your partial.
 
-## Documentation
+Parameters passed to EJSPartial's `_init` function (like what is done in the example above) will be passed into the constructors of each sub-partial when they are created. An object passed to EJSPartial's `_generate` function will be used as the scope for the template.
+
+## documentation
 
 ### `Partial`
 
-#### `#genTime: Date`
+#### `#_act(...params: *): undefined|Promise<>`
 
-The time of the most recent generation, or the time the partial was constructed if it has yet to be generated.
+A method that can be implemented by partial classes, performing operations that should be done on every generation. `...params` are the parameters passed to `#generate`, other than the first two.
 
-#### `#generate(since: Date = genTime): Promise<*>`
+This method is called before both `#_needsUpdate` and `#_generate` when starting partial generation, and if a promise is returned, partial generation for the partial instance will be paused until it is completed (note that `#_act` can potentially run twice at the same time if two different partial parameters are used).
 
-Generate the partial if it has changed since the provided date, and return a promise with the partial value. If the partial is already being generated, the returned promise will be that of the previous generation.
+#### `#_generate(partial(name: string): *, param: *): *|Promise<*>`
 
-#### `#needsUpdate(since: Date = genTime): Promise<bool>`
+A method that should be implemented by a partial class, returning the content of the partial. The content of sub-partials that have been registered with `#requires` can be accessed by calling the `partial` function parameter with the partial's name. The partial parameter provided to `#generate` (or provided to a parents `#generate`) can be accessed as `param`.
 
-Determines whether the partial requires updating, by calling the partials `_needsUpdate` function and then checking each sub-partial. This function is memoized, reset after generation is complete - as a result, you can safely use it before generation in your own code without causing multiple calls.
+This method is called after both `#_act` and `#_needsUpdate`, and will only be called if there is no version of the partial stored with the specified `param`, if `#_needsUpdate` returns a truthy value, or if a sub-partial needs to be updated.
+
+#### `#_init(): undefined|Promise<>`
+
+A method that can be implemented by partial classes, performing operations to initialise the partial. Initialisation can only be done once on each partial instance, and will be done as soon as the `init` method is called on this partial or one of the partials parents. If a sub-partial is childed to a partial that has already initialised, the sub-partial will be initialised immediately.
+
+Any operations done on the partial (e.g. generation) while the partial is initialising will wait for initialisation to complete before proceeding.
+
+#### `#_needsUpdate(since: Date, param: *): bool|Promise<bool>`
+
+A method that can be implemented by partial classes, specifying whether the partial should update by returning a truthy or falsey value (or a promise that resolves to either). `since` is either the date passed to `#generate` (or a parents `#generate`) as the first parameter, the last time the partial with the provided parameter was generated, or the creation time if it has not yet been generated. `param` is the partial parameter provided to `#generate` (or a parents `#generate`) as the second parameter.
+
+This method is called after `#_act` but before `#_generate`, and will not be called if no cached version of the partial exists (as the partial must generate in that case).
+
+#### `#generate(since: Date?, param: string = 'default', ...actParams): Promise<*>`
+
+Returns a promise that resolves to the value of the partial. If the partial, or any of its sub-partials, specify that they need to update, this will occur. If the partial is currently being generated, the returned promise will be that of the previous generation.
+
+`param` can be used to provide a value to the partials `_generate` function, and can be any JSON-stringifiable value. Partials are cached based on their `param` value, so using a different value will result in the partial being generated again.
+
+`actParams` are provided to the `_act` method.
+
+#### `#genTime(param: string = 'default'): Date`
+
+Returns the generation time of the current version of the partial with the provided partial parameter. If the partial has not yet been generated, the creation time of the partial instance will be used instead.
 
 #### `#init(): Promise<>`
 
-Initializes the partial and sub-partials. This partial will be initialized, followed by all sub-partials at the same time. The promise will resolve when complete.
+Runs the `_init` method of the partial and any sub-partials. If the partial has already been initialised or is currently in the process of initialing, nothing will happen.
+
+#### `#needsUpdate(since: Date?, param: string = 'default'): Promise<bool>`
+
+Returns a promise that resolves to a truthy or falsey value, representing whether the partial needs to be regenerated. Note that this includes checking sub-partials, but does not check to see if the partial has been generated yet.
+
+`since` will be passed to the `#_needsUpdate` method, or, if not provided, the previous generation time of the partial will be used.
+
+For speed, the result of `#needsUpdate` is memoized - this means that checks will only actually be run once for each `#generate` call (calling `#generate` clears the memoization). This memoization will only take place if the provided `since` date is the same.
 
 #### `#requires(name: string, partial: Partial): Promise<>`
 
-Specifies that the partial depends on a sub-partial. `name` is used in order to reference the partial when accessing its value with `#partial`. If the parent partial has already been initialized, the provided partial will be initialized immediately, with the promise resolving when complete.
+Specifies that the partial uses a sub-partial. The name provided is then used in `#_generate` when calling the `partial` function parameter. Since the partial initialisation process also initialises all sub-partials registered, if a sub-partial is registered _after_ the parent partial has initialisated, the sub-partial will be initialised straight away. The returned promise resolves when this completes, or when the parent partial completes initialisation if it has not yet completed.
 
-**Throws `TypeError`** if the partial is missing a `_generate` function.
+A `TypeError` will be thrown if the provided partial does not have a `#_generate` method.
 
-#### `#partial(name: string): *`
+## license
 
-Gets the output of a sub-partial. As this function is only usable inside a `_generate` call, the values of the partial are calculated asynchronously beforehand, allowing synchronous access here.
-
-**Throws `ReferenceError`** if no partial by the provided name exists
-**Throws `Error`** if `#partial` is being called from outside a `_generate` call (not allowed)
-
-#### `#_needsUpdate(date: Date): bool | Promise<bool>`
-
-A function that should be implemented by subclasses, returning whether the partial content has changed since the provided date. By default, returns `false`, allowing the function to be excluded for a completely static partial.
-
-#### `#_generate(): * | Promise<*>`
-
-A function that should be implemented by subclasses, returning the content of the partial. Is not implemented in the base `Partial` class, and `#requires` will throw an error on receiving a partial without this method.
-
-#### `#_init(): undefined | Promise<>`
-
-A function that should be implemented by subclasses, initializing the partial. Initialization of sub-partials is not required here, as that is done automatically later. Both this and the partial constructor are the best times to 'require' a sub-partial. By default, does nothing.
-
-
-## License
-
-Licensed under the MIT license, included in LICENSE.
+Licensed under the MIT license, included in the LICENSE file.
