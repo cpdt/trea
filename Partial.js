@@ -36,6 +36,8 @@ Partial.prototype._needsUpdate = function() {
     return false;
 };
 
+Partial.prototype._act = function() { };
+
 Partial.prototype._init = function() { };
 
 Partial.prototype.init = co.wrap(function*() {
@@ -74,7 +76,7 @@ Partial.prototype.genTime = function(param) {
     return this._getCache(param).genTime;
 };
 
-Partial.prototype.generate = co.wrap(function*(since, param = 'default') {
+Partial.prototype.generate = co.wrap(function*(since, param = 'default', ...actParams) {
     // wait for initialization to complete
     if (this._initPromise) yield this._initPromise;
 
@@ -82,11 +84,11 @@ Partial.prototype.generate = co.wrap(function*(since, param = 'default') {
 
     // prevent multiple generations happening at the same time
     if (currentCache.renderPromise) {
-        holdDebug(this._partialId + '#' + currentCache.keyName);
+        holdDebug('#' + this._partialId + currentCache.keyName);
         return yield currentCache.renderPromise;
     }
 
-    let genPromise = this._doGenerate(since, param, currentCache);
+    let genPromise = this._doGenerate(since, param, actParams, currentCache);
     currentCache.renderPromise = genPromise;
     let result = yield genPromise;
     currentCache.renderPromise = false;
@@ -94,10 +96,12 @@ Partial.prototype.generate = co.wrap(function*(since, param = 'default') {
     return result;
 });
 
-Partial.prototype._doGenerate = co.wrap(function*(since, param, currentCache) {
+Partial.prototype._doGenerate = co.wrap(function*(since, param, actParams, currentCache) {
+    yield Promise.resolve(this._act(...actParams));
+
     let regen = currentCache.genCache === false || (yield this.needsUpdate(since, param));
     if (!regen) {
-        cacheHitDebug(this._partialId + '#' + currentCache.keyName);
+        cacheHitDebug('#' + this._partialId + currentCache.keyName);
         return currentCache.genCache;
     }
 
@@ -105,7 +109,7 @@ Partial.prototype._doGenerate = co.wrap(function*(since, param, currentCache) {
     let partialContents = new Map();
     yield Array.from(this._requiredPartials.keys()).map(name => {
         let partial = this._requiredPartials.get(name);
-        return partial.generate(since, param).then(r => partialContents.set(name, r));
+        return partial.generate(since, param, ...actParams).then(r => partialContents.set(name, r));
     });
     
     function getPartial(name) {
@@ -114,7 +118,7 @@ Partial.prototype._doGenerate = co.wrap(function*(since, param, currentCache) {
     }
 
     currentCache.genTime = new Date();
-    regenDebug(this._partialId + '#' + currentCache.keyName);
+    regenDebug('#' + this._partialId + currentCache.keyName);
     return currentCache.genCache = yield Promise.resolve(this._generate(getPartial, param));
 });
 
